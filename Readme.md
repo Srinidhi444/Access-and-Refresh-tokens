@@ -41,7 +41,7 @@ React ── access token in memory ──▶ Express API ── RS256 verificat
 
 ```txt
 jwt-refresh-demo/
-├── server/
+├── backend/
 │   ├── package.json
 │   ├── generate-keys.js
 │   ├── .env
@@ -77,7 +77,7 @@ jwt-refresh-demo/
 ### Install the backend
 
 ```bash
-cd server
+cd backend
 npm install
 ```
 
@@ -98,7 +98,7 @@ npm install
 
 ## Environment Variables
 
-### `server/.env`
+### `backend/.env`
 
 ```env
 PORT=5000
@@ -117,7 +117,7 @@ VITE_API_URL=http://localhost:5000/api
 Backend:
 
 ```bash
-cd server
+cd backend
 npm run dev
 ```
 
