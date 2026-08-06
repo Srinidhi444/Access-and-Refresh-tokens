@@ -1,34 +1,29 @@
 # JWT Auth Demo — Access Tokens + Rotating Refresh Tokens
 
-A production-style authentication system demonstrating the **canonical JWT architecture**: short-lived RS256 access tokens held in browser memory, paired with long-lived, server-tracked, rotating refresh tokens stored in an `HttpOnly` cookie. Includes refresh-token reuse detection, session revocation, and a live token-lifecycle dashboard.
+A production-style authentication demo using short-lived RS256 access tokens in browser memory and long-lived, server-tracked, rotating refresh tokens in an `HttpOnly` cookie. It includes refresh-token reuse detection, session revocation, automatic refresh, and a live token-lifecycle dashboard.
 
 ```txt
-React (Vite) ── Access token in memory ──▶ Express API ── RS256 verify (no DB hit)
-      │                                          │
-      └── Refresh token: HttpOnly cookie ────────┴── MongoDB (refresh-token sessions)
+React ── access token in memory ──▶ Express API ── RS256 verification
+  │                                      │
+  └── refresh token: HttpOnly cookie ───┴── MongoDB refresh sessions
 ```
-
----
 
 ## Table of Contents
 
 1. [Stack](#stack)
-2. [Repo Structure](#repo-structure)
+2. [Repository Structure](#repository-structure)
 3. [Setup](#setup)
 4. [Environment Variables](#environment-variables)
 5. [Running the App](#running-the-app)
 6. [API Reference](#api-reference)
 7. [Token Architecture](#token-architecture)
 8. [Why RS256](#why-rs256)
-9. [Refresh Token Rotation](#refresh-token-rotation)
-10. [Reuse Detection](#reuse-detection)
-11. [Login / Logout Flows](#login--logout-flows)
-12. [Handling Stale & Expired Sessions](#handling-stale--expired-sessions)
-13. [Attack Scenarios & Mitigations](#attack-scenarios--mitigations)
-14. [Dashboard Token Lifecycle View](#dashboard-token-lifecycle-view)
-15. [Known Limitations / Production TODOs](#known-limitations--production-todos)
-
----
+9. [Refresh Rotation and Reuse Detection](#refresh-rotation-and-reuse-detection)
+10. [Authentication Flows](#authentication-flows)
+11. [Stale and Expired Sessions](#stale-and-expired-sessions)
+12. [Attack Scenarios and Mitigations](#attack-scenarios-and-mitigations)
+13. [Dashboard Lifecycle View](#dashboard-lifecycle-view)
+14. [Token Architecture Limitations](#token-architecture-limitations)
 
 ## Stack
 
@@ -36,15 +31,13 @@ React (Vite) ── Access token in memory ──▶ Express API ── RS256 ve
 |---|---|
 | Frontend | React (Vite), React Router, Axios |
 | Backend | Node.js, Express |
-| Database | MongoDB (Mongoose) |
-| Access token | JWT, RS256 (asymmetric signing) |
-| Refresh token | Opaque random token, SHA-256 hashed at rest, rotated on use |
+| Database | MongoDB with Mongoose |
+| Access token | JWT with RS256 asymmetric signing |
+| Refresh token | Opaque random token, SHA-256 hash at rest, rotated on use |
 | Password hashing | bcrypt |
-| Styling | Plain CSS — black & white, glassmorphism |
+| Styling | Plain CSS, black-and-white glassmorphism |
 
----
-
-## Repo Structure
+## Repository Structure
 
 ```txt
 jwt-refresh-demo/
@@ -52,24 +45,15 @@ jwt-refresh-demo/
 │   ├── package.json
 │   ├── generate-keys.js
 │   ├── .env
-│   ├── keys/
-│   │   ├── private.pem
-│   │   └── public.pem
+│   ├── keys/{private.pem,public.pem}
 │   └── src/
 │       ├── server.js
 │       ├── app.js
-│       ├── config/
-│       │   └── db.js
-│       ├── models/
-│       │   ├── User.model.js
-│       │   └── RefreshToken.model.js
-│       ├── services/
-│       │   └── tokenService.js
-│       ├── middleware/
-│       │   └── auth.middleware.js
-│       └── routes/
-│           ├── auth.routes.js
-│           └── protected.routes.js
+│       ├── config/db.js
+│       ├── models/{User.model.js,RefreshToken.model.js}
+│       ├── services/tokenService.js
+│       ├── middleware/auth.middleware.js
+│       └── routes/{auth.routes.js,protected.routes.js}
 └── client/
     ├── package.json
     ├── .env
@@ -77,52 +61,40 @@ jwt-refresh-demo/
         ├── main.jsx
         ├── App.jsx
         ├── index.css
-        ├── api/
-        │   └── axios.js
-        ├── context/
-        │   └── AuthContext.jsx
-        ├── utils/
-        │   └── jwt.js
-        └── pages/
-            ├── Signin.jsx
-            ├── Signup.jsx
-            └── Dashboard.jsx
+        ├── api/axios.js
+        ├── context/AuthContext.jsx
+        ├── utils/jwt.js
+        └── pages/{Signin.jsx,Signup.jsx,Dashboard.jsx}
 ```
-
----
 
 ## Setup
 
 ### Prerequisites
 
-- Node.js 18+
-- A running MongoDB instance (local or Atlas)
+- Node.js 18 or later.
+- A running MongoDB instance, local or Atlas.
 
-### 1. Clone and install backend
+### Install the backend
 
 ```bash
 cd server
 npm install
 ```
 
-### 2. Generate the RS256 keypair
-
-Access tokens are signed with a private key and verified with a public key. Generate this pair once — it must exist before the server starts.
+### Generate the RS256 keypair
 
 ```bash
 node generate-keys.js
 ```
 
-This creates `keys/private.pem` and `keys/public.pem`. Never commit these to version control in a real project.
+This creates `keys/private.pem` and `keys/public.pem`. Never commit the private key in a real project.
 
-### 3. Install frontend
+### Install the frontend
 
 ```bash
 cd ../client
 npm install
 ```
-
----
 
 ## Environment Variables
 
@@ -140,329 +112,289 @@ NODE_ENV=development
 VITE_API_URL=http://localhost:5000/api
 ```
 
----
-
 ## Running the App
 
-Terminal 1 — backend:
+Backend:
 
 ```bash
 cd server
 npm run dev
 ```
 
-Terminal 2 — frontend:
+Frontend:
 
 ```bash
 cd client
 npm run dev
 ```
 
-Open `http://localhost:5173`. The backend must allow credentialed CORS from this origin:
+Open `http://localhost:5173`. The backend must allow credentialed CORS:
 
 ```js
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true,
+}));
 ```
-
----
 
 ## API Reference
 
-| Method | Route | Auth required | Purpose |
+| Method | Route | Authentication | Purpose |
 |---|---|---|---|
-| POST | `/api/auth/signup` | No | Create account, issue access + refresh token |
-| POST | `/api/auth/signin` | No | Authenticate, issue access + refresh token |
-| POST | `/api/auth/refresh` | Refresh cookie | Rotate refresh token, issue new access token |
-| GET | `/api/auth/session-info` | Refresh cookie | Return refresh-session metadata (no raw token) |
-| POST | `/api/auth/logout` | Refresh cookie | Revoke current session family |
+| POST | `/api/auth/signup` | None | Create a user and issue tokens |
+| POST | `/api/auth/signin` | None | Authenticate and issue tokens |
+| POST | `/api/auth/refresh` | Refresh cookie | Rotate refresh token and issue access token |
+| GET | `/api/auth/session-info` | Refresh cookie | Return safe refresh-session metadata |
+| POST | `/api/auth/logout` | Refresh cookie | Revoke the current session family |
 | POST | `/api/auth/logout-all` | Access token | Revoke every session for the user |
 | GET | `/api/me` | Access token | Example protected resource |
 
----
-
 ## Token Architecture
 
-Two credentials, two jobs, two storage locations:
+The system uses two credentials with different purposes and storage locations:
 
 | | Access token | Refresh token |
 |---|---|---|
-| Format | JWT (RS256) | Opaque random string |
+| Format | RS256 JWT | Opaque random string |
 | Lifetime | 10 minutes | 30 days |
 | Client storage | JavaScript memory only | `HttpOnly`, `Secure`, `SameSite=Strict` cookie |
-| Server storage | None (stateless, self-verifying) | SHA-256 hash in MongoDB |
-| Readable by JS? | Yes, briefly, while in memory | Never |
-| Revocable? | No — just wait out the short expiry | Yes — delete/flag its DB record |
-| Sent on | Every API request (`Authorization: Bearer`) | Only to `/api/auth/*` (cookie `path` scoped) |
+| Server storage | None; verified using signature | SHA-256 hash in MongoDB |
+| Readable by JavaScript? | Yes, while in memory | No |
+| Revocable? | Not immediately; expires naturally | Yes, through MongoDB state |
+| Used for | Every protected API request | Only token refresh operations |
 
-**Why split them this way:** if an XSS attack manages to read the access token, the blast radius is capped at ~10 minutes. The refresh token — the credential that matters over the long term — never enters JS-reachable memory at all, because the browser handles `HttpOnly` cookies without exposing them to `document.cookie` or any script.
-
----
+The short-lived access token limits the impact of a stolen access token. The long-lived refresh token never enters JavaScript-accessible storage.
 
 ## Why RS256
 
-RS256 signs the JWT with a **private key** and verifies it with a matching **public key** — as opposed to HS256, which uses one shared secret for both operations.
+RS256 uses asymmetric signing:
 
 ```txt
-Backend (private.pem) ── signs access tokens
-Any verifier (public.pem) ── checks signatures, cannot create tokens
+Private key → signs access tokens
+Public key  → verifies access tokens
 ```
 
-**What it prevents:** an attacker cannot forge or modify a token's claims (e.g. changing `sub` to another user's ID) without the private key — any tampering breaks the signature and `jwt.verify` rejects it.
+The private key stays on the authentication server. Other services can verify tokens with the public key without being able to create new ones. This is useful when an application later grows into multiple services.
 
-**What it does NOT do:** RS256 doesn't encrypt the payload. A JWT is signed, not encrypted — anyone can base64-decode and read the claims. It also doesn't revoke tokens; a valid, unexpired token remains valid regardless of what happens server-side. That's precisely why the access token's lifetime is kept short — 10 minutes is the outer bound of how "wrong" an already-issued token can be.
+RS256 prevents attackers from modifying claims or forging valid tokens without the private key. It does not encrypt the JWT payload, revoke issued tokens, or prevent the use of a valid stolen token. The payload should contain only non-sensitive claims such as `sub`, `email`, `iat`, and `exp`.
 
-Verification also pins the algorithm explicitly:
+Verification pins the algorithm:
 
 ```js
 jwt.verify(token, PUBLIC_KEY, { algorithms: ['RS256'] });
 ```
 
-This blocks classic JWT algorithm-confusion attacks (e.g. an attacker sending a token signed with `alg: none` or switching to HS256 using the public key as an HMAC secret).
+## Refresh Rotation and Reuse Detection
 
----
-
-## Refresh Token Rotation
-
-Every time a refresh token is used, it's replaced — it cannot be used twice.
+A successful refresh always replaces the refresh token:
 
 ```txt
-Login
-  └─ Token A (familyId: F1)
+Signin:
+  Access A + Refresh A, family F1
 
-Refresh
-  └─ Token A → revoked
-  └─ Token B created (familyId: F1)
+Refresh:
+  Refresh A → revoked
+  Refresh B → created, family F1
+  Access B  → created
 
-Refresh
-  └─ Token B → revoked
-  └─ Token C created (familyId: F1)
+Next refresh:
+  Refresh B → revoked
+  Refresh C → created, family F1
+  Access C  → created
 ```
 
-All tokens produced from one login form a **family** (`familyId`). Rotation happens inside `/api/auth/refresh`:
+The server stores only the SHA-256 hash of each refresh token. Each record contains the user, `familyId`, expiry, revocation state, replacement hash, IP, and user-agent metadata.
+
+The refresh process is:
 
 ```txt
-1. Hash the presented raw token.
-2. Look it up in MongoDB.
-3. Not found          → reject (401 INVALID_TOKEN)
-4. Expired            → reject (401 EXPIRED_TOKEN)
-5. Already revoked    → REUSE DETECTED (see below)
-6. Otherwise: revoke it, create a new token in the same family, return it.
+1. Hash the presented refresh token.
+2. Find its record in MongoDB.
+3. Missing  → 401 INVALID_TOKEN.
+4. Expired  → 401 EXPIRED_TOKEN.
+5. Already revoked → reuse detected.
+6. Valid → revoke old token, create replacement, issue access token.
 ```
 
-This caps how long a stolen refresh token is useful: it either gets used immediately (before the legitimate client rotates it) or it becomes worthless the moment either party rotates first.
+If a previously revoked token is presented again, the server treats it as possible theft and revokes all active tokens in that family. The legitimate user must sign in again.
 
----
+## Authentication Flows
 
-## Reuse Detection
-
-Rotation alone tells you a token was single-use. **Reuse detection** is what turns that into an actual theft alarm.
+### Signup and signin
 
 ```txt
-Legit browser:  Token A → rotates → Token B
-Attacker:       replays Token A (already revoked)
-                        │
-                        ▼
-        Server sees revokedAt != null on Token A
-                        │
-                        ▼
-        Revoke EVERY token in familyId F1
-                        │
-                        ▼
-        Both the attacker and the legit browser
-        are logged out — user must sign in again
+1. Validate input.
+2. Hash the password with bcrypt during signup or verify it during signin.
+3. Create an RS256 access token.
+4. Create a refresh-token family and store its hash.
+5. Set the refresh token as an HttpOnly cookie scoped to /api/auth.
+6. Return the access token in JSON.
+7. Store the access token in React memory.
 ```
 
-This is a deliberate trade-off: a genuine theft attempt should force full re-authentication rather than silently continuing, even though it also logs out the legitimate user in that moment. It's the same logic OAuth/OIDC providers use for refresh token rotation.
-
----
-
-## Login / Logout Flows
-
-### Signup / Signin
+### Normal protected request
 
 ```txt
-1. Validate input, hash password with bcrypt (signup only).
-2. Verify credentials (signin only).
-3. Sign a new RS256 access token.
-4. Create a brand-new refresh-token family, store its hash in MongoDB.
-5. Set the refresh token as an HttpOnly cookie, scoped to /api/auth.
-6. Return the access token in the JSON response body.
-7. Client stores the access token in memory; user state is set.
+1. Axios sends Authorization: Bearer <access-token>.
+2. Express verifies the signature and expiry using the public key.
+3. Valid token → req.user is populated and the route proceeds.
+4. Invalid or expired token → 401.
 ```
 
-### Authenticated request
+Normal API requests do not rotate the refresh token and do not require a MongoDB lookup.
+
+### Expired access token
 
 ```txt
-1. Axios attaches Authorization: Bearer <access-token>.
-2. Middleware verifies signature + expiry (RS256, public key). No DB call.
-3. Valid → req.user populated, request proceeds.
-4. Invalid/expired → 401.
+Protected request → 401
+  → Axios calls /api/auth/refresh
+  → Browser sends HttpOnly refresh cookie
+  → Server rotates refresh token
+  → New access token returned
+  → Original request retried
 ```
 
-### Access token expires mid-session
-
-```txt
-1. Request returns 401.
-2. Axios interceptor detects this (and that it isn't already a retry
-   or an auth endpoint), then calls POST /api/auth/refresh.
-3. Browser auto-attaches the refresh cookie (JS never touches it).
-4. Server rotates the refresh token, issues a new access token.
-5. Interceptor retries the original request with the new token.
-6. User never notices — the request just "worked."
-```
+A shared `refreshPromise` prevents several simultaneous failed requests in one tab from performing multiple rotations.
 
 ### Page reload
 
-```txt
-1. In-memory access token is gone (memory doesn't survive a reload).
-2. AuthContext calls /api/auth/refresh on mount.
-3. If the refresh cookie is still valid → new access token, session restored.
-4. If not → user lands on /signin.
-```
+The access token disappears because it is stored in memory. `AuthContext` automatically calls `/api/auth/refresh` during startup. If the cookie is valid, the session is restored and a new access token is stored in memory.
 
 ### Logout
 
 ```txt
-1. POST /api/auth/logout.
-2. Server finds the current refresh token's family, revokes it entirely.
-3. Server clears the cookie.
-4. Client clears the in-memory access token and user state.
+POST /api/auth/logout
+  → Revoke the current refresh-token family
+  → Clear the refresh cookie
+  → Clear the in-memory access token and user state
 ```
+
+The existing access token may technically remain valid until its short expiry, but it cannot be refreshed.
 
 ### Logout everywhere
 
 ```txt
-1. POST /api/auth/logout-all (requires a valid access token).
-2. Server revokes every non-revoked refresh token belonging to that user,
-   across all families/devices.
-3. Every other open session loses its ability to refresh.
+POST /api/auth/logout-all
+  → Revoke all refresh sessions belonging to the user
+  → Other devices can no longer refresh
+  → Their existing access tokens expire naturally
 ```
 
----
+## Stale and Expired Sessions
 
-## Handling Stale & Expired Sessions
+### Expired access token
 
-"Stale" sessions can mean a few different things in this system — each is handled differently on purpose.
-
-### 1. Access token merely expired (the common case)
-
-This is expected, routine behavior — it happens every ~10 minutes for an active user. It does **not** revoke anything. The interceptor silently refreshes and the family stays intact:
+This is normal. It does not revoke the refresh family:
 
 ```txt
-Expired access token → 401 → auto-refresh → new access token → retry
+Expired access token → 401 → refresh → new access token → retry
 ```
 
-### 2. Refresh token expired (user inactive for 30+ days)
+### Expired refresh token
 
-```txt
-POST /api/auth/refresh
-        │
-        ▼
-existing.expiresAt < now()
-        │
-        ▼
-401 EXPIRED_TOKEN, cookie cleared
-        │
-        ▼
-Client redirects to /signin
-```
+A user inactive for more than the 30-day refresh lifetime receives `401 EXPIRED_TOKEN`, the cookie is cleared, and signin is required. MongoDB's TTL index removes expired records automatically.
 
-No family revocation is needed — an expired token can't be used again anyway. MongoDB's TTL index (`expireAfterSeconds: 0` on `expiresAt`) also physically deletes these documents automatically, keeping the collection clean without a cron job.
+### Missing refresh token
 
-### 3. Refresh token missing entirely
+A cleared cookie, new browser, or new device produces `401 NO_REFRESH_TOKEN`; the client requires signin.
 
-Happens when cookies were cleared, the user is on a new device, or it's a fresh browser profile:
+### Reused refresh token
 
-```txt
-No refresh_token cookie
-        │
-        ▼
-401 NO_REFRESH_TOKEN
-        │
-        ▼
-Client redirects to /signin
-```
+A previously rotated refresh token produces reuse detection and revokes its entire family. This is the only normal refresh condition that triggers family-wide revocation.
 
-### 4. Refresh token reused after rotation (theft signal)
+### React StrictMode
 
-Covered in detail above — this is the one case that **does** revoke the entire family, because it's the one case that indicates something is actually wrong rather than just "time passed."
+Development StrictMode can invoke mount effects twice. The `useRef` initialization guard ensures session restoration runs once and avoids accidental double rotation during startup.
 
-### 5. Concurrent requests during expiry
+## Attack Scenarios and Mitigations
 
-If five API calls fail with 401 simultaneously (e.g. a dashboard loading multiple widgets at once), the client doesn't fire five separate `/refresh` calls — which would be a real problem given that refresh tokens are single-use. Instead:
-
-```js
-if (!refreshPromise) {
-  refreshPromise = api.post('/auth/refresh')...
-}
-const newToken = await refreshPromise; // everyone awaits the same promise
-```
-
-All five requests await the *same* in-flight refresh promise, then retry with the resulting token. Only one rotation happens.
-
-### 6. React StrictMode double-invocation
-
-In development, React 18 StrictMode intentionally runs mount effects twice to surface bugs. Without a guard, this would fire two `/refresh` calls on load — the second would see an already-rotated (and thus already-revoked) token and trip reuse detection, incorrectly logging the user out. Fixed with a `useRef` guard so session restoration runs exactly once:
-
-```js
-const hasInitialized = useRef(false);
-useEffect(() => {
-  if (hasInitialized.current) return;
-  hasInitialized.current = true;
-  restoreSession();
-}, []);
-```
-
----
-
-## Attack Scenarios & Mitigations
-
-| Scenario | Mitigation in this system |
+| Scenario | Mitigation |
 |---|---|
-| XSS reads `localStorage` | Access token is never in `localStorage`; it lives only in JS memory and expires in 10 min |
-| XSS tries to read the refresh token | Impossible — `HttpOnly` blocks all script access to the cookie |
-| Attacker steals a refresh token (e.g. via device/log access) and replays it | First use by either party rotates the token; if the stolen one is used *after* rotation, reuse detection revokes the whole family |
-| Attacker forges/modifies a JWT's claims | RS256 signature check fails without the private key |
-| Attacker sends a token with `alg: none` or switches algorithms | `jwt.verify` is pinned to `algorithms: ['RS256']` |
-| Refresh cookie sent cross-site (CSRF) | `SameSite=Strict` + cookie `path` scoped to `/api/auth` only |
-| Database read exposure (backup leak, etc.) | Only SHA-256 hashes of refresh tokens are stored, never raw values — same principle as password hashing |
-| User loses their device | `logout-all` revokes every refresh-token family for that user, killing all sessions everywhere |
-| Long-idle session | Refresh token has a hard 30-day expiry; MongoDB TTL index purges expired records automatically |
+| XSS reads `localStorage` | Access tokens are never stored there; they live only in memory and expire quickly |
+| Script reads refresh token | `HttpOnly` prevents JavaScript from reading the cookie |
+| Stolen refresh token is replayed | Rotation makes tokens single-use; reuse detection revokes the family |
+| JWT claims are modified or forged | RS256 signature verification rejects tampered tokens |
+| Algorithm confusion attempt | Verification accepts only `RS256` |
+| Cross-site cookie abuse | `SameSite=Strict` and the cookie path is limited to `/api/auth` |
+| Database read exposure | Only refresh-token hashes are stored |
+| Lost device | `logout-all` revokes all refresh-token families |
+| Long-idle session | Refresh token expires after 30 days and MongoDB purges it |
 
-**What this system does NOT solve by itself:** rate limiting on auth endpoints, CSRF tokens beyond `SameSite`, HTTPS enforcement, secrets-manager key storage, and general XSS hardening (CSP, output encoding) are all still the app's responsibility — see below.
+`HttpOnly` prevents refresh-token reading, but it does not make XSS harmless: malicious same-site JavaScript may still attempt requests as the user. Cookie-based authentication must therefore be combined with CSRF and XSS defenses.
 
----
+## Dashboard Lifecycle View
 
-## Dashboard Token Lifecycle View
-
-After signing in, the dashboard shows the tokens' actual lifecycle instead of static text:
+The dashboard displays a live, safe view of the session without exposing the raw refresh token:
 
 ```txt
-Access Token card          Refresh Token card
-├─ Masked token preview    ├─ Session family ID (masked)
-├─ Status: Active/         ├─ Status: Active/Expired
-│  Expiring/Expired        ├─ Days/hours remaining
-├─ Countdown (mm:ss)       └─ Issued timestamp
-└─ Draining progress bar
+Access-token card
+├── Masked access-token preview
+├── Active / Expiring / Expired status
+├── Countdown and progress bar
+└── Issued time and storage information
 
-Event Timeline
-├─ "Signed in — access token issued, refresh session started"
-├─ "Access token expiring in under 60 seconds"
-├─ "Access token expired — refresh token rotated, new access token issued"
-├─ "Manual refresh — refresh token rotated"
-└─ "Logged out — refresh token family revoked"
+Refresh-session card
+├── Masked session family ID
+├── Active / Expired status
+├── Remaining days and hours
+└── Issued time and cookie information
+
+Event timeline
+├── Signin or signup
+├── Session restoration
+├── Token expiration warning
+├── Automatic or manual rotation
+└── Logout and family revocation
 ```
 
-A "Force refresh" button triggers rotation on demand, so the whole expiry → refresh → rotate cycle can be observed without waiting the full 10 minutes.
+The **Force refresh** button calls `/api/auth/refresh` immediately so rotation can be observed without waiting ten minutes. It is a demonstration feature, not normally a user-facing production control.
 
----
+## Token Architecture Limitations
 
-## Known Limitations / Production TODOs
+### 1. Access tokens are not immediately revocable
 
-- **Atomic rotation**: the current find-then-revoke-then-create sequence isn't wrapped in a MongoDB transaction. Under true concurrent refresh calls, use `findOneAndUpdate` with a conditional filter or a transaction to guarantee a token is consumed exactly once.
-- **Rate limiting**: `/signup`, `/signin`, and `/refresh` have no throttling yet — add `express-rate-limit` or similar before exposing this publicly.
-- **CSRF tokens**: `SameSite=Strict` covers most cases, but a double-submit CSRF token on `/refresh` and `/logout` adds defense in depth.
-- **Secrets management**: `private.pem` is a local file for this demo. In production, load it from a secrets manager (AWS Secrets Manager, Vault, etc.), never from the repo.
-- **HTTPS**: `secure: true` on cookies is gated behind `NODE_ENV === 'production'` — make sure the production deployment actually terminates TLS before that cookie flag matters.
-- **Security headers**: add `helmet` and a Content-Security-Policy to reduce the impact of any future XSS vector.
-- **Session management UI**: the data model already supports listing/revoking individual sessions (`createdByIp`, `userAgent`, `familyId` per record) — a "your devices" page is a natural next feature.
+The server does not store access tokens or query MongoDB for every request. After logout, an already-issued access token may remain valid until its short expiration time. Refresh-token revocation prevents new access tokens from being issued.
+
+### 2. Access tokens disappear after reload
+
+This is the security trade-off of memory-only storage. The refresh cookie restores the session during application startup.
+
+### 3. XSS can still use an in-memory access token
+
+An XSS payload may make API requests while the application is open. Memory-only storage reduces persistence but does not replace CSP, output encoding, safe dependencies, and general XSS prevention.
+
+### 4. HttpOnly does not eliminate CSRF risk
+
+Scripts cannot read an HttpOnly cookie, but the browser may attach it automatically to requests. `SameSite=Strict` helps, but cookie-based authentication still requires appropriate origin and CSRF protections.
+
+### 5. Rotation must be atomic
+
+The demo's rotation logic should use a MongoDB transaction, atomic conditional update, or distributed lock in production so two simultaneous requests cannot consume the same refresh token.
+
+### 6. Multiple tabs need coordination
+
+The Axios `refreshPromise` protects one tab. Multiple tabs can still race while rotating the same cookie. `BroadcastChannel`, browser locks, or a shared refresh coordinator can reduce this risk.
+
+### 7. Reuse detection can log out the legitimate user
+
+A reused token may indicate theft, but it may also result from a legitimate multi-tab race. Family-wide revocation is intentionally strict; atomic rotation and tab coordination reduce false positives.
+
+### 8. A stolen refresh token is still dangerous
+
+An attacker with the raw refresh token may use it before it is rotated. Rotation limits its lifetime of usefulness and reuse detection identifies later replay, but no token mechanism can make a successfully stolen credential harmless.
+
+### 9. Refresh sessions have a maximum lifetime
+
+After 30 days, the refresh session expires and the user must sign in again. This prevents indefinite sessions.
+
+### 10. JWT payloads are readable
+
+RS256 signs but does not encrypt the JWT. Never put passwords, secrets, payment data, or other sensitive information in the access-token payload.
+
+### 11. Signing-key rotation requires planning
+
+When RSA keys are replaced, old tokens must remain verifiable until they expire or the system must support key IDs and multiple active public keys during the transition.
+
+### 12. Revocation applies immediately to refresh tokens, not access tokens
+
+MongoDB can immediately prevent future refresh operations. Already-issued access tokens remain valid until expiry unless the application adds a separate denylist or server-side session check for sensitive operations.
